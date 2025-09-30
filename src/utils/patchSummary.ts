@@ -1,6 +1,38 @@
 import { xdPatchFields } from '../data/xdPatchFields'
 import type { RawXdPatch } from '../lib/minilogueXd'
 
+const multiNoiseTypes = ['High', 'Low', 'Peak', 'Decim']
+const multiVpmTypes = [
+  'Sin 1',
+  'Sin 2',
+  'Sin 3',
+  'Sin 4',
+  'Saw 1',
+  'Saw 2',
+  'Square 1',
+  'Square 2',
+  'Fat 1',
+  'Fat 2',
+  'Air 1',
+  'Air 2',
+  'Decay 1',
+  'Decay 2',
+  'Creep',
+  'Throat',
+]
+
+const MULTI_TYPE_OFFSET = 38
+const SELECT_NOISE_OFFSET = 39
+const SELECT_VPM_OFFSET = 40
+const SELECT_USER_OFFSET = 41
+const SHAPE_NOISE_OFFSET = 42
+const SHAPE_VPM_OFFSET = 44
+const SHAPE_USER_OFFSET = 46
+const SHIFT_SHAPE_NOISE_OFFSET = 48
+const SHIFT_SHAPE_VPM_OFFSET = 50
+const SHIFT_SHAPE_USER_OFFSET = 52
+const MULTI_LEVEL_OFFSET = 58
+
 const fieldMap = new Map(xdPatchFields.map((field) => [field.field, field]))
 
 const textDecoder = new TextDecoder('utf-8')
@@ -31,7 +63,26 @@ const percentFields = new Set([
   'shape_noise',
   'shape_vpm',
   'shape_user',
+  'user_param1',
+  'user_param2',
+  'user_param3',
+  'user_param4',
+  'user_param5',
+  'user_param6',
 ])
+
+const getPercentMax = (key: string) => {
+  const meta = fieldMap.get(key)
+  if (!meta) return 1023
+  switch (meta.format) {
+    case 'B':
+      return 127
+    case '<H':
+      return 1023
+    default:
+      return 1023
+  }
+}
 
 const readValue = (progBin: Uint8Array, key: string): number | string | null => {
   const meta = fieldMap.get(key)
@@ -45,7 +96,10 @@ const readValue = (progBin: Uint8Array, key: string): number | string | null => 
     case '4s':
     case '12s': {
       const bytes = progBin.subarray(meta.offset, meta.offset + meta.length)
-      return textDecoder.decode(bytes).replace(/\u0000.*$/, '').trim()
+      const decoded = textDecoder.decode(bytes)
+      const nullIndex = decoded.indexOf('\u0000')
+      const safe = nullIndex === -1 ? decoded : decoded.slice(0, nullIndex)
+      return safe.trim()
     }
     default:
       return null
@@ -54,44 +108,103 @@ const readValue = (progBin: Uint8Array, key: string): number | string | null => 
 
 const formatPercent = (value: number, max = 1023) => `${Math.round((value / max) * 100)}% (${value})`
 
-const readNumber = (progBin: Uint8Array, key: string): number => {
-  const result = readValue(progBin, key)
-  if (typeof result === 'number') return result
-  return 0
+type MultiEngineSummary = {
+  mode: string
+  variant?: string
+  level: { raw: number; max: number }
+  shape?: { label: string; raw: number; max: number }
+  shift?: { label: string; raw: number; max: number }
+  params: Array<{ label: string; raw: number; max: number }>
 }
 
-const getMultiEngineSummary = (progBin: Uint8Array) => {
-  const selects = [
-    readNumber(progBin, 'select_noise'),
-    readNumber(progBin, 'select_vpm'),
-    readNumber(progBin, 'select_user'),
-  ]
-  const activeIndex = selects.findIndex((value) => value > 0)
-  if (activeIndex === -1) return null
+const getMultiEngineSummary = (patch: RawXdPatch): MultiEngineSummary | null => {
+  const progBin = patch.progBin
+  if (progBin.length <= MULTI_LEVEL_OFFSET) return null
 
-  const level = readNumber(progBin, 'multi_level')
-  if (level === 0) return null
+  const view = new DataView(progBin.buffer, progBin.byteOffset, progBin.byteLength)
+  const multiType = view.getUint8(MULTI_TYPE_OFFSET)
+  const level = view.getUint16(MULTI_LEVEL_OFFSET, true)
 
-  const shapeKeys = ['shape_noise', 'shape_vpm', 'shape_user']
-  const shape = readNumber(progBin, shapeKeys[activeIndex])
-  const shiftShapeKeys = ['shift_shape_noise', 'shift_shape_vpm', 'shift_shape_user']
-  const shift = readNumber(progBin, shiftShapeKeys[activeIndex])
-
-  return {
-    type: multiNames[activeIndex] ?? 'Multi',
-    level: formatPercent(level),
-    shape: formatPercent(shape),
-    shift: shift ? formatPercent(shift) : undefined,
+  const summary: MultiEngineSummary = {
+    mode: multiNames[multiType] ?? 'Multi',
+    level: { raw: level, max: 1023 },
+    params: [],
   }
+
+  switch (multiType) {
+    case 0: {
+      const index = view.getUint8(SELECT_NOISE_OFFSET)
+      summary.variant = multiNoiseTypes[index] ?? `Noise ${index + 1}`
+      summary.shape = { label: 'Shape', raw: view.getUint16(SHAPE_NOISE_OFFSET, true), max: 1023 }
+      summary.shift = { label: 'Shift', raw: view.getUint16(SHIFT_SHAPE_NOISE_OFFSET, true), max: 1023 }
+      break
+    }
+    case 1: {
+      const index = view.getUint8(SELECT_VPM_OFFSET)
+      summary.variant = multiVpmTypes[index] ?? `VPM ${index + 1}`
+      summary.shape = { label: 'Shape', raw: view.getUint16(SHAPE_VPM_OFFSET, true), max: 1023 }
+      summary.shift = { label: 'Shape Mod', raw: view.getUint16(SHIFT_SHAPE_VPM_OFFSET, true), max: 1023 }
+      const vpmParams: Array<{ label: string; offset: number }> = [
+        { label: 'Feedback', offset: 136 },
+        { label: 'Noise Depth', offset: 137 },
+        { label: 'Shape Mod Int', offset: 138 },
+        { label: 'Mod Attack', offset: 139 },
+        { label: 'Mod Decay', offset: 140 },
+        { label: 'Key Track', offset: 141 },
+      ]
+      summary.params = vpmParams.map(({ label, offset }) => ({ label, raw: view.getUint8(offset), max: 127 }))
+      break
+    }
+    case 2: {
+      const slot = view.getUint8(SELECT_USER_OFFSET)
+      const assignment = patch.userAssignments?.oscillator
+      const slotLabel = `Slot ${slot + 1}`
+      if (assignment?.name) {
+        summary.variant = assignment.slot != null ? `${assignment.name} (Slot ${assignment.slot + 1})` : assignment.name
+      } else if (assignment?.path) {
+        summary.variant = assignment.slot != null ? `${assignment.path} (Slot ${assignment.slot + 1})` : assignment.path
+      } else {
+        summary.variant = slotLabel
+      }
+      summary.shape = { label: 'Shape', raw: view.getUint16(SHAPE_USER_OFFSET, true), max: 1023 }
+      summary.shift = { label: 'Shift', raw: view.getUint16(SHIFT_SHAPE_USER_OFFSET, true), max: 1023 }
+      const userParams: Array<{ label: string; offset: number }> = [
+        { label: 'Param 1', offset: 142 },
+        { label: 'Param 2', offset: 143 },
+        { label: 'Param 3', offset: 144 },
+        { label: 'Param 4', offset: 145 },
+        { label: 'Param 5', offset: 146 },
+        { label: 'Param 6', offset: 147 },
+      ]
+      summary.params = userParams.map(({ label, offset }) => ({ label, raw: view.getUint8(offset), max: 127 }))
+      break
+    }
+    default: {
+      summary.shape = { label: 'Shape', raw: view.getUint16(SHAPE_NOISE_OFFSET, true), max: 1023 }
+      summary.shift = { label: 'Shift', raw: view.getUint16(SHIFT_SHAPE_NOISE_OFFSET, true), max: 1023 }
+    }
+  }
+
+  return summary
 }
 
 const formatValue = (key: string, value: number | string | null) => {
   if (value == null) return '—'
   if (typeof value === 'string') return value || '—'
   if (percentFields.has(key)) {
-    return formatPercent(value)
+    return formatPercent(value, getPercentMax(key))
   }
   switch (key) {
+    case 'voice_mode_type': {
+      const modes = ['Poly', 'Unison', 'Chord', 'Arp', 'Multi']
+      return modes[value] ?? String(value)
+    }
+    case 'voice_mode_depth':
+      return formatPercent(value, getPercentMax(key))
+    case 'keyboard_octave': {
+      const labels = ['-2', '-1', '0', '+1', '+2']
+      return labels[value] ?? String(value)
+    }
     case 'vco_1_wave':
     case 'vco_2_wave':
       return waveNames[value] ?? String(value)
@@ -103,12 +216,22 @@ const formatValue = (key: string, value: number | string | null) => {
   }
 }
 
-export interface PatchSummaryCategory {
+export interface PatchSummaryRow {
   label: string
-  rows: Array<{ label: string; value: string }>
+  value: string
+  rawValue?: number | string | null
+  normalizedValue?: number
 }
 
-const categories: Array<{ label: string; fields: Array<{ key: string; label: string }> }> = [
+export interface PatchSummaryCategory {
+  label: string
+  rows: PatchSummaryRow[]
+}
+
+const categories: Array<{
+  label: string
+  fields: Array<{ key: string; label: string }>
+}> = [
   {
     label: 'Oscillator 1',
     fields: [
@@ -133,9 +256,7 @@ const categories: Array<{ label: string; fields: Array<{ key: string; label: str
   },
   {
     label: 'Multi Engine',
-    fields: [
-      { key: 'multi_level', label: 'Level' },
-    ],
+    fields: [],
   },
   {
     label: 'Mixer',
@@ -171,37 +292,115 @@ const categories: Array<{ label: string; fields: Array<{ key: string; label: str
   },
 ]
 
+const createRow = (progBin: Uint8Array, key: string, label: string): PatchSummaryRow | null => {
+  const rawValue = readValue(progBin, key)
+  const displayValue = formatValue(key, rawValue)
+  if (displayValue === '—' || displayValue === '0% (0)') return null
+
+  if (typeof rawValue === 'number' && percentFields.has(key)) {
+    const max = getPercentMax(key)
+    const normalized = Math.max(0, Math.min(1, rawValue / max))
+    return { label, value: displayValue, rawValue, normalizedValue: normalized }
+  }
+
+  return { label, value: displayValue, rawValue }
+}
+
+const createPercentRow = (
+  label: string,
+  rawValue: number,
+  max: number,
+): PatchSummaryRow => ({
+  label,
+  value: formatPercent(rawValue, max),
+  rawValue,
+  normalizedValue: Math.max(0, Math.min(1, rawValue / max)),
+})
+
 export const getPatchSummary = (patch: RawXdPatch): PatchSummaryCategory[] => {
   const progBin = patch.progBin
-  const multiSummary = getMultiEngineSummary(progBin)
+  const multiSummary = getMultiEngineSummary(patch)
 
-  return categories
-    .map((category) => ({
-      label: category.label,
-      rows: category.fields
-        .map((item) => ({
-          label: item.label,
-          value: formatValue(item.key, readValue(progBin, item.key)),
-        }))
-        .filter((row) => row.value !== '—' && row.value !== '0% (0)'),
-    }))
-    .filter((category) => category.rows.length > 0)
-    .map((category) => {
-      if (category.label === 'Multi Engine' && multiSummary) {
-        return {
-          label: category.label,
-          rows: [
-            { label: 'Type', value: multiSummary.type },
-            { label: 'Level', value: multiSummary.level },
-            { label: 'Shape', value: multiSummary.shape },
-            ...(multiSummary.shift ? [{ label: 'Shift Shape', value: multiSummary.shift }] : []),
-          ],
-        }
+  const baseCategories = categories.map((category) => ({
+    label: category.label,
+    rows: category.fields
+      .map((item) => createRow(progBin, item.key, item.label))
+      .filter((row): row is PatchSummaryRow => Boolean(row)),
+  }))
+
+  const results: PatchSummaryCategory[] = []
+
+  if (progBin.length > 22) {
+    const view = new DataView(progBin.buffer, progBin.byteOffset, progBin.byteLength)
+    const modeType = view.getUint8(21)
+    const depthValue = view.getUint16(19, true)
+    const keyboardOct = view.getUint8(16)
+
+    const modeLabels = ['Poly', 'Unison', 'Chord', 'Arp', 'Multi']
+    const modeRows: PatchSummaryRow[] = [{ label: 'Mode', value: modeLabels[modeType] ?? `Mode ${modeType}` }]
+
+    const octaveLabels = ['-2', '-1', '0', '+1', '+2']
+    if (keyboardOct < octaveLabels.length) {
+      modeRows.push({ label: 'Keyboard Oct', value: octaveLabels[keyboardOct] })
+    }
+
+    if (modeType === 2) {
+      const chordTypes = [
+        'Mono',
+        'Poly',
+        'Unison',
+        'Octave',
+        'Fifth',
+        'Sus4',
+        'Major',
+        'Minor',
+        'Dim',
+        'Maj7',
+        'Min7',
+        'Dominant7',
+        '9th',
+        'Min9',
+        'Sus2',
+        'Sixth',
+      ]
+      const chordIndex = Math.min(chordTypes.length - 1, Math.round(depthValue / 64))
+      modeRows.push({ label: 'Chord', value: chordTypes[chordIndex] ?? `Type ${chordIndex}` })
+    } else if (modeType === 1 || modeType === 4) {
+      if (depthValue > 0) {
+        modeRows.push(createPercentRow('Depth', depthValue, 1023))
       }
-      if (category.label === 'Multi Engine' && !multiSummary) {
-        return { ...category, rows: [] }
+    } else if (modeType === 3) {
+      if (depthValue > 0) {
+        modeRows.push(createPercentRow('Arp Depth', depthValue, 1023))
       }
-      return category
-    })
-    .filter((category) => category.rows.length > 0)
+    }
+
+    results.push({ label: 'Voice Mode', rows: modeRows })
+  }
+
+  baseCategories.forEach((category) => {
+    if (category.label === 'Multi Engine') {
+      if (!multiSummary) return
+
+      const rows: PatchSummaryRow[] = [{ label: 'Mode', value: multiSummary.mode }]
+      if (multiSummary.variant) {
+        rows.push({ label: multiSummary.mode === 'User' ? 'Oscillator' : 'Variant', value: multiSummary.variant })
+      }
+      rows.push(createPercentRow('Level', multiSummary.level.raw, multiSummary.level.max))
+      if (multiSummary.shape) {
+        rows.push(createPercentRow(multiSummary.shape.label, multiSummary.shape.raw, multiSummary.shape.max))
+      }
+      if (multiSummary.shift) {
+        rows.push(createPercentRow(multiSummary.shift.label, multiSummary.shift.raw, multiSummary.shift.max))
+      }
+      multiSummary.params.forEach((param) => {
+        rows.push(createPercentRow(param.label, param.raw, param.max))
+      })
+      results.push({ label: 'Oscillator 3', rows })
+    } else if (category.rows.length) {
+      results.push(category)
+    }
+  })
+
+  return results
 }

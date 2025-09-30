@@ -1,0 +1,183 @@
+.patch-visual {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.05), rgba(15, 23, 42, 0.02));
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  padding: clamp(1rem, 2vw, 1.75rem);
+}
+
+.patch-visual__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.patch-visual__heading {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #475467;
+}
+
+.patch-visual__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.patch-visual__stack {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.patch-knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 80px;
+}
+
+
+.patch-knob__svg {
+  width: 72px;
+  height: 72px;
+  color: #1f2937;
+  transition: transform 0.2s ease;
+}
+
+.patch-knob__svg circle {
+  fill: #ffffff;
+  stroke: currentColor;
+  stroke-width: 10px;
+}
+
+.patch-knob__svg line {
+  stroke: #4338ca;
+  stroke-width: 20px;
+  stroke-linecap: round;
+}
+
+.patch-knob.is-empty .patch-knob__svg {
+  opacity: 0.4;
+}
+
+.patch-knob__label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475467;
+}
+
+.patch-knob__value {
+  font-size: 0.75rem;
+  color: #1f2937;
+}
+
+.patch-options {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  color: #475467;
+}
+
+.patch-options__item {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.04);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.patch-options__item.is-active {
+  border-color: rgba(67, 56, 202, 0.45);
+  background: rgba(67, 56, 202, 0.15);
+  color: #312e81;
+}
+
+.patch-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(15, 23, 42, 0.04);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.patch-toggle.is-active {
+  border-color: rgba(67, 56, 202, 0.4);
+  background: rgba(67, 56, 202, 0.14);
+  color: #3730a3;
+}
+
+.patch-visual__variant {
+  font-size: 0.8rem;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.patch-effects {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.patch-effect {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: rgba(249, 250, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.patch-effect__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: #475467;
+}
+
+.patch-effect__status {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+}
+
+.patch-effect__status.is-on {
+  color: #15803d;
+}
+
+.patch-effect__knobs {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 920px) {
+  .patch-visual {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  .patch-knob__svg {
+    width: 60px;
+    height: 60px;
+  }
+}
+
+@media (max-width: 640px) {
+  .patch-visual {
+    grid-template-columns: 1fr;
+  }
+}

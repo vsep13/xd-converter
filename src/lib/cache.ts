@@ -51,7 +51,11 @@ export const listCachedFiles = async (): Promise<CachedFileMeta[]> =>
       request.onsuccess = () => {
         const records = (request.result as CachedFileRecord[]) ?? []
         const sorted = records
-          .map(({ data: _data, ...meta }) => meta)
+          .map((record) => {
+            const { data, ...meta } = record
+            void data
+            return meta
+          })
           .sort((a, b) => b.timestamp - a.timestamp)
         resolve(sorted)
       }

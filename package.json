@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/ensure-rollup-native.mjs && tsc -b && vite build && npm run build:cli --silent",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "build:cli": "esbuild automation/cli.ts --bundle --platform=node --format=esm --log-level=error --outfile=automation/cli.js",
+    "cli": "npm run build:cli --silent && node automation/cli.js",
+    "preview": "vite preview",
+    "ensure:rollup-native": "node scripts/ensure-rollup-native.mjs",
+    "postinstall": "node scripts/ensure-rollup-native.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.2",

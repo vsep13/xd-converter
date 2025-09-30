@@ -10,6 +10,37 @@ const PROGRAM_NAME_OFFSET = 4
 const PROGRAM_NAME_LENGTH = 12
 const XD_PATCH_SIZE = 1024
 
+const MULTI_TYPE_OFFSET = 38
+const SELECT_USER_OFFSET = 41
+const MULTI_TYPE_USER = 2
+
+const extractUserDataFilename = (path?: string) => {
+  if (!path) return undefined
+  const match = path.match(/[^/\\]+$/)
+  return match ? match[0] : path
+}
+
+const createUserAssignments = (progBin: Uint8Array, userData?: XdUserData | null): PatchUserAssignments | undefined => {
+  if (!progBin || progBin.length < MULTI_TYPE_OFFSET + 1) return undefined
+
+  const view = new DataView(progBin.buffer, progBin.byteOffset, progBin.byteLength)
+  const assignments: PatchUserAssignments = {}
+
+  const multiType = view.getUint8(MULTI_TYPE_OFFSET)
+  if (multiType === MULTI_TYPE_USER) {
+    const slot = view.getUint8(SELECT_USER_OFFSET)
+    const entries = userData?.oscillators ?? []
+    const entry = entries[slot] ?? (slot > 0 ? entries[slot - 1] : undefined)
+    assignments.oscillator = {
+      slot,
+      path: entry?.path,
+      name: extractUserDataFilename(entry?.path),
+    }
+  }
+
+  return assignments.oscillator ? assignments : undefined
+}
+
 
 const md5 = (data: Uint8Array): string => {
   const rotateLeft = (lValue: number, shiftBits: number) => (lValue << shiftBits) | (lValue >>> (32 - shiftBits))
@@ -166,6 +197,8 @@ const md5 = (data: Uint8Array): string => {
 
   return (toHex(a) + toHex(b) + toHex(c) + toHex(d)).toLowerCase()
 }
+
+export const createPatchHash = (data: Uint8Array): string => md5(data)
 const FAVORITE_SLOTS = 16
 
 const normalizeFavorites = (favorites: number[] | undefined, patchCount: number): number[] => {
@@ -288,6 +321,19 @@ export type XdCollectionKind = 'library' | 'preset'
 
 export type PatchStatus = 'normal' | 'factory' | 'init'
 
+export interface PatchUserAssignment {
+  slot: number
+  path?: string
+  name?: string
+}
+
+export interface PatchUserAssignments {
+  oscillator?: PatchUserAssignment
+  modEffect?: PatchUserAssignment
+  delayEffect?: PatchUserAssignment
+  reverbEffect?: PatchUserAssignment
+}
+
 export interface RawXdPatch {
   index: number
   name: string
@@ -297,6 +343,19 @@ export interface RawXdPatch {
   programmer?: string | null
   status?: PatchStatus
   hash: string
+  userAssignments?: PatchUserAssignments
+}
+
+export interface UserDataEntry {
+  path: string
+  data: Uint8Array
+}
+
+export interface XdUserData {
+  oscillators: UserDataEntry[]
+  modEffects: UserDataEntry[]
+  delayEffects: UserDataEntry[]
+  reverbEffects: UserDataEntry[]
 }
 
 export interface XdCollectionMetadata {
@@ -311,6 +370,7 @@ export interface XdCollectionMetadata {
   warnings?: string[]
   toolVersion?: string
   buildTimestamp?: string
+  userData?: XdUserData
 }
 
 export interface XdCollection {
@@ -333,6 +393,7 @@ export interface BuildCollectionOptions {
   kind: XdCollectionKind
   presetInfo?: Partial<PresetInformationFields>
   favorites?: number[]
+  userData?: XdUserData
 }
 
 const padIndex = (index: number) => index.toString().padStart(3, '0')
@@ -406,11 +467,90 @@ const parsePresetInformation = (xml: string): PresetInformationFields => {
 type FileInfoOptions = {
   includePresetInformation: boolean
   includeFavoriteData: boolean
+  userData?: XdUserData
   metadata?: {
     toolName: string
     version: string
     buildTimestamp: string
   }
+}
+
+const createEmptyUserData = (): XdUserData => ({
+  oscillators: [],
+  modEffects: [],
+  delayEffects: [],
+  reverbEffects: [],
+})
+
+const mapUserDataSection = (value: string): keyof XdUserData | null => {
+  const lower = value.toLowerCase()
+  if (lower.includes('osc')) return 'oscillators'
+  if (lower.includes('mod')) return 'modEffects'
+  if (lower.includes('del')) return 'delayEffects'
+  if (lower.includes('rev')) return 'reverbEffects'
+  if (lower.includes('fx') || lower.includes('effect')) return 'modEffects'
+  return null
+}
+
+const detectUserDataCategoryFromPath = (path: string): keyof XdUserData | null => {
+  const lower = path.toLowerCase()
+  if (lower.includes('userosc')) return 'oscillators'
+  if (lower.includes('usermodfx') || lower.includes('user_modfx')) return 'modEffects'
+  if (lower.includes('userdelfx') || lower.includes('userdelay')) return 'delayEffects'
+  if (lower.includes('userrevfx') || lower.includes('userreverb')) return 'reverbEffects'
+  if (lower.includes('usereffect') || lower.includes('userfx')) return 'modEffects'
+  return null
+}
+
+const collectUserDataEntries = (
+  files: Record<string, Uint8Array>,
+  fileInfoXml: string,
+): { data: XdUserData; warnings: string[] } => {
+  const userData = createEmptyUserData()
+  const warnings: string[] = []
+  const referenced = new Set<string>()
+
+  const addEntry = (category: keyof XdUserData, path: string, data: Uint8Array) => {
+    const exists = userData[category].some((entry) => entry.path === path)
+    if (!exists) {
+      userData[category].push({ path, data })
+    }
+  }
+
+  const sectionPattern = /<User([A-Za-z0-9]+)Data>([\s\S]*?)<\/User\1Data>/gi
+  let sectionMatch: RegExpExecArray | null
+  while ((sectionMatch = sectionPattern.exec(fileInfoXml)) !== null) {
+    const [, rawSection, sectionBody] = sectionMatch
+    const category = mapUserDataSection(rawSection)
+    if (!category) continue
+
+    const filePattern = /<File>([^<]+)<\/File>/gi
+    let fileMatch: RegExpExecArray | null
+    while ((fileMatch = filePattern.exec(sectionBody)) !== null) {
+      const rawPath = fileMatch[1]?.trim()
+      if (!rawPath) continue
+      referenced.add(rawPath)
+      const data = files[rawPath]
+      if (data) {
+        addEntry(category, rawPath, data)
+      } else {
+        warnings.push(`FileInformation.xml references missing user data file "${rawPath}"`)
+      }
+    }
+  }
+
+  Object.entries(files).forEach(([path, data]) => {
+    if (referenced.has(path)) return
+    const category = detectUserDataCategoryFromPath(path)
+    if (!category) return
+    addEntry(category, path, data)
+  })
+
+  ;(Object.keys(userData) as Array<keyof XdUserData>).forEach((key) => {
+    userData[key].sort((a, b) => a.path.localeCompare(b.path))
+  })
+
+  return { data: userData, warnings }
 }
 
 const buildFileInformationXml = (
@@ -428,6 +568,11 @@ const buildFileInformationXml = (
   const includeFavorite = options.includeFavoriteData
   const includePreset = options.includePresetInformation
 
+  const userOsc = options.userData?.oscillators ?? []
+  const userModFx = options.userData?.modEffects ?? []
+  const userDelayFx = options.userData?.delayEffects ?? []
+  const userReverbFx = options.userData?.reverbEffects ?? []
+
   const attributes = [
     `NumProgramData="${count}"`,
     `NumPresetInformation="${includePreset ? 1 : 0}"`,
@@ -435,6 +580,10 @@ const buildFileInformationXml = (
     `NumTuneOctData="0"`,
     `NumLivesetData="0"`,
     `NumFavoriteData="${includeFavorite ? 1 : 0}"`,
+    ...(userOsc.length ? [`NumUserOscillatorData="${userOsc.length}"`] : []),
+    ...(userModFx.length ? [`NumUserModFXData="${userModFx.length}"`] : []),
+    ...(userDelayFx.length ? [`NumUserDelayFXData="${userDelayFx.length}"`] : []),
+    ...(userReverbFx.length ? [`NumUserReverbFXData="${userReverbFx.length}"`] : []),
   ]
 
   const metadataBlock = options.metadata
@@ -457,12 +606,37 @@ const buildFileInformationXml = (
     </FavoriteData>`
     : ''
 
+  const userBlock = (label: string, items: UserDataEntry[]) =>
+    items.length
+      ? `    <${label}>
+${items.map((entry) => `      <File>${entry.path}</File>`).join('\n')}
+    </${label}>`
+      : ''
+
+  const userOscBlock = userBlock('UserOscillatorData', userOsc)
+  const userModBlock = userBlock('UserModFXData', userModFx)
+  const userDelayBlock = userBlock('UserDelayFXData', userDelayFx)
+  const userReverbBlock = userBlock('UserReverbFXData', userReverbFx)
+
+  const headerBlocks = [
+    metadataBlock,
+    presetBlock,
+    favoriteBlock,
+    userOscBlock,
+    userModBlock,
+    userDelayBlock,
+    userReverbBlock,
+  ]
+    .filter((block): block is string => Boolean(block))
+    .join('\n')
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 
 <KorgMSLibrarian_Data>
   <Product>minilogue xd</Product>
   <Contents ${attributes.join(' ')}>
-${metadataBlock ? `${metadataBlock}\n` : ''}${presetBlock ? `${presetBlock}\n` : ''}${favoriteBlock ? `${favoriteBlock}\n` : ''}${entries}
+${headerBlocks ? `${headerBlocks}\n` : ''}
+${entries}
   </Contents>
 </KorgMSLibrarian_Data>
 `
@@ -531,7 +705,7 @@ export const parseXdCollection = (buffer: ArrayBuffer, sourceName?: string): XdC
     }
     unmatchedProgInfo.delete(progInfoName)
 
-    const hash = md5(data)
+    const hash = createPatchHash(data)
     const patchName = extractProgramName(data)
     duplicateNames.set(patchName, (duplicateNames.get(patchName) ?? 0) + 1)
     const comment = extractProgInfoField(progInfo, 'Comment')
@@ -570,6 +744,18 @@ export const parseXdCollection = (buffer: ArrayBuffer, sourceName?: string): XdC
     throw new Error('FileInformation.xml is missing from archive')
   }
 
+  const { data: userData, warnings: userDataWarnings } = collectUserDataEntries(files, fileInformationXml)
+  if (userDataWarnings.length) {
+    warnings.push(...userDataWarnings)
+  }
+
+  patches.forEach((patch) => {
+    const assignments = createUserAssignments(patch.progBin, userData)
+    if (assignments) {
+      patch.userAssignments = assignments
+    }
+  })
+
   const counts = parseFileInformationCounts(fileInformationXml)
   if (typeof counts.programData === 'number' && counts.programData !== patches.length) {
     warnings.push(
@@ -583,6 +769,27 @@ export const parseXdCollection = (buffer: ArrayBuffer, sourceName?: string): XdC
 
   if (!counts.favoriteData && favoriteData) {
     warnings.push('FavoriteData.fav_data present but FileInformation.xml does not list favorite data')
+  }
+
+  const userDataLabels: Record<keyof XdUserData, string> = {
+    oscillators: 'user oscillator file',
+    modEffects: 'user mod FX file',
+    delayEffects: 'user delay FX file',
+    reverbEffects: 'user reverb FX file',
+  }
+
+  if (counts.userDataCounts) {
+    ;(Object.keys(counts.userDataCounts) as Array<keyof XdUserData>).forEach((key) => {
+      const expected = counts.userDataCounts?.[key]
+      if (typeof expected !== 'number') return
+      const actual = userData[key].length
+      if (expected !== actual) {
+        const label = userDataLabels[key]
+        warnings.push(
+          `FileInformation.xml reports ${expected} ${label}${expected === 1 ? '' : 's'} but archive contains ${actual}`,
+        )
+      }
+    })
   }
 
   const { toolVersion, buildTimestamp } = parseConverterMetadata(fileInformationXml)
@@ -612,6 +819,13 @@ export const parseXdCollection = (buffer: ArrayBuffer, sourceName?: string): XdC
     toolVersion,
     buildTimestamp,
     warnings: warnings.length ? warnings : undefined,
+    userData:
+      userData.oscillators.length ||
+      userData.modEffects.length ||
+      userData.delayEffects.length ||
+      userData.reverbEffects.length
+        ? userData
+        : undefined,
   }
 
   return { patches, metadata }
@@ -633,7 +847,7 @@ export const parseXdPatch = (buffer: ArrayBuffer): RawXdPatch => {
   const name = extractProgramName(progBin)
   const comment = extractProgInfoField(progInfo, 'Comment')
   const programmer = extractProgInfoField(progInfo, 'Programmer')
-  const hash = md5(progBin)
+  const hash = createPatchHash(progBin)
   const status: PatchStatus = initHashSet.has(hash) ? 'init' : factoryHashSet.has(hash) ? 'factory' : 'normal'
 
   return {
@@ -695,8 +909,24 @@ export const buildXdCollectionArchive = (
   baseEntries['FileInformation.xml'] = buildFileInformationXml(ordered.length, {
     includePresetInformation: includePreset,
     includeFavoriteData: !includePreset && ordered.length > 1,
+    userData: options.userData,
     metadata: buildMetadata(),
   })
+
+  const appendUserEntries = (entries: UserDataEntry[] | undefined) => {
+    entries?.forEach((entry) => {
+      if (!(entry.path in baseEntries)) {
+        baseEntries[entry.path] = entry.data
+      }
+    })
+  }
+
+  if (options.userData) {
+    appendUserEntries(options.userData.oscillators)
+    appendUserEntries(options.userData.modEffects)
+    appendUserEntries(options.userData.delayEffects)
+    appendUserEntries(options.userData.reverbEffects)
+  }
 
   if (includePreset) {
     baseEntries['PresetInformation.xml'] = buildPresetInformationXml(fields, ordered.length)
@@ -835,15 +1065,31 @@ const parseFileInformationCounts = (xml: string): {
   programData?: number
   favoriteData?: number
   presetInformation?: number
+  userDataCounts?: Partial<Record<keyof XdUserData, number>>
 } => {
   const readAttr = (attr: string) => {
-    const match = xml.match(new RegExp(`${attr}="(\d+)"`))
+    const pattern = new RegExp(String.raw`${attr}="(\d+)"`)
+    const match = xml.match(pattern)
     return match ? Number(match[1]) : undefined
   }
+
+  const userMatches = Array.from(xml.matchAll(/NumUser([A-Za-z0-9]+)Data="(\d+)"/gi))
+  const userDataCounts: Partial<Record<keyof XdUserData, number>> = {}
+
+  userMatches.forEach((match) => {
+    const [, rawSection, rawCount] = match
+    const category = mapUserDataSection(rawSection)
+    if (!category) return
+    const parsed = Number(rawCount)
+    if (!Number.isNaN(parsed)) {
+      userDataCounts[category] = parsed
+    }
+  })
 
   return {
     programData: readAttr('NumProgramData'),
     favoriteData: readAttr('NumFavoriteData'),
     presetInformation: readAttr('NumPresetInformation'),
+    userDataCounts: Object.keys(userDataCounts).length ? userDataCounts : undefined,
   }
 }

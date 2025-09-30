@@ -11,12 +11,12 @@ Planned enhancements ordered from lowest to highest complexity. Items near the t
 7. ~~Archive validation with checksum reporting and missing-file detection.~~ _(warnings shipped)_
 8. ~~Local library cache for quick recall of recently used patches.~~ _(shipped)_
 9. ~~Factory / init program detection via known hash lists.~~ _(hash-based)
-10. Patch parameter visualisation and comparison tools.
-11. CSV / JSON exports of patch summaries for cataloguing.
-12. Integration hooks (CLI or REST endpoints) for automation.
-13. Parameter randomisation utilities with range controls.
-14. Expanded support for user oscillators / effects data.
-15. MIDI librarian mode for direct hardware communication.
+10. ~~Patch parameter visualisation and comparison tools.~~ _(shipped)_
+11. ~~CSV / JSON exports of patch summaries for cataloguing.~~ _(shipped)_
+12. ~~Integration hooks (CLI or REST endpoints) for automation.~~ _(CLI shipped)_
+13. ~~Parameter randomisation utilities with range controls.~~ _(shipped)_
+14. ~~Expanded support for user oscillators / effects data.~~ _(shipped)_
+15. ~~MIDI librarian mode for direct hardware communication.~~ _(beta shipped)_
 16. Embedded audio preview or rendering pipeline.
 
 This list will evolve as features ship or new requirements emerge; update it as priorities change.
